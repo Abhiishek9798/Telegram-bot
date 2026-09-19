@@ -103,22 +103,28 @@ function downloadYouTube(url, outputPath, quality) {
     let cmd;
 
     if (quality === 'mp3') {
-      // MP3 extraction with android client bypass
       cmd = `yt-dlp -x --audio-format mp3 --no-playlist \
-        --extractor-args "youtube:player_client=android,web" \
-        --add-headers "User-Agent:Mozilla/5.0" \
+        --extractor-args "youtube:player_client=tv_embedded,android_vr" \
+        --no-check-certificate \
         -o "${outputPath}.mp3" "${url}"`;
     } else {
-      // Video download with android client bypass
       const fmt = `bestvideo[height<=${quality}][ext=mp4]+bestaudio/best[height<=${quality}]/best`;
       cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 \
-        --extractor-args "youtube:player_client=android,web" \
-        --add-headers "User-Agent:Mozilla/5.0" \
+        --extractor-args "youtube:player_client=tv_embedded,android_vr" \
+        --no-check-certificate \
         -o "${outputPath}.mp4" "${url}"`;
     }
 
     exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
-      if (error) { reject(new Error(stderr || error.message)); return; }
+      if (error) {
+        // Filter only real ERROR lines, ignore warnings
+        const errLines = (stderr || '')
+          .split('\n')
+          .filter(l => l.includes('ERROR:'))
+          .join('\n');
+        reject(new Error(errLines || error.message));
+        return;
+      }
 
       const ext      = quality === 'mp3' ? 'mp3' : 'mp4';
       const filePath = `${outputPath}.${ext}`;
