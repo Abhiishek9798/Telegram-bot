@@ -94,71 +94,44 @@ function fetchVideoInfo(url) {
 }
 
 // ─────────────────────────────────────────────
-// 🎬 COBALT API — For YouTube (works on cloud!)
+// 🎬 YOUTUBE DOWNLOAD — Cloud Bypass Trick
+// Uses android player client to avoid bot detection
 // ─────────────────────────────────────────────
 
-const https = require('https');
-
-function downloadFromUrl(fileUrl, destPath) {
+function downloadYouTube(url, outputPath, quality) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
-    https.get(fileUrl, (response) => {
-      // Follow redirects
-      if (response.statusCode === 301 || response.statusCode === 302) {
-        file.close();
-        downloadFromUrl(response.headers.location, destPath).then(resolve).catch(reject);
-        return;
+    let cmd;
+
+    if (quality === 'mp3') {
+      // MP3 extraction with android client bypass
+      cmd = `yt-dlp -x --audio-format mp3 --no-playlist \
+        --extractor-args "youtube:player_client=android,web" \
+        --add-headers "User-Agent:Mozilla/5.0" \
+        -o "${outputPath}.mp3" "${url}"`;
+    } else {
+      // Video download with android client bypass
+      const fmt = `bestvideo[height<=${quality}][ext=mp4]+bestaudio/best[height<=${quality}]/best`;
+      cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 \
+        --extractor-args "youtube:player_client=android,web" \
+        --add-headers "User-Agent:Mozilla/5.0" \
+        -o "${outputPath}.mp4" "${url}"`;
+    }
+
+    exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
+      if (error) { reject(new Error(stderr || error.message)); return; }
+
+      const ext      = quality === 'mp3' ? 'mp3' : 'mp4';
+      const filePath = `${outputPath}.${ext}`;
+
+      if (fs.existsSync(filePath)) {
+        resolve(filePath);
+      } else {
+        const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(path.basename(outputPath)));
+        if (files.length > 0) resolve(path.join(DOWNLOAD_DIR, files[0]));
+        else reject(new Error('Downloaded file not found.'));
       }
-      response.pipe(file);
-      file.on('finish', () => file.close(() => resolve(destPath)));
-    }).on('error', (err) => {
-      fs.unlink(destPath, () => {});
-      reject(err);
     });
   });
-}
-
-async function downloadViaCobalt(url, outputPath, mode) {
-  // mode: 'auto' = video, 'audio' = MP3
-  const body = JSON.stringify({
-    url,
-    downloadMode: mode,       // 'auto' or 'audio'
-    audioFormat:  'mp3',      // mp3 when audio mode
-    filenameStyle: 'basic',
-  });
-
-  const downloadUrl = await new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.cobalt.tools',
-      path:     '/',
-      method:   'POST',
-      headers:  {
-        'Content-Type':   'application/json',
-        'Accept':         'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.url) resolve(json.url);
-          else reject(new Error(json.error?.code || 'Cobalt API error'));
-        } catch (e) {
-          reject(new Error('Invalid Cobalt response'));
-        }
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-
-  const ext      = mode === 'audio' ? 'mp3' : 'mp4';
-  const filePath = `${outputPath}.${ext}`;
-  await downloadFromUrl(downloadUrl, filePath);
-  return filePath;
 }
 
 // ─────────────────────────────────────────────
@@ -511,11 +484,10 @@ async function processDownload(ctx, quality) {
     let filePath;
 
     if (isYouTube) {
-      // 🎬 YouTube → Use Cobalt API (works on cloud!)
-      const cobaltMode = quality === 'mp3' ? 'audio' : 'auto';
-      filePath = await downloadViaCobalt(url, outputPath, cobaltMode);
+      // 🎬 YouTube → android client bypass
+      filePath = await downloadYouTube(url, outputPath, quality);
     } else {
-      // 📱 Instagram, TikTok, Twitter etc. → Use yt-dlp
+      // 📱 Instagram, TikTok, Twitter etc. → yt-dlp
       filePath = await downloadMedia(url, outputPath, quality);
     }
     clearInterval(progressTimer);
