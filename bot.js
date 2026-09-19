@@ -21,6 +21,23 @@ const bot = new Telegraf(TOKEN);
 const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
+// ─────────────────────────────────────────────
+// 🍪 YOUTUBE COOKIES SETUP
+// Set YOUTUBE_COOKIES env var on Render with base64 encoded cookies.txt
+// ─────────────────────────────────────────────
+
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
+
+if (process.env.YOUTUBE_COOKIES) {
+  try {
+    const cookiesData = Buffer.from(process.env.YOUTUBE_COOKIES, 'base64').toString('utf-8');
+    fs.writeFileSync(COOKIES_PATH, cookiesData);
+    console.log('🍪 YouTube cookies loaded!');
+  } catch (e) {
+    console.error('❌ Failed to load cookies:', e.message);
+  }
+}
+
 // Store pending data per user: { url, formats }
 const pendingDownloads = new Map();
 
@@ -53,8 +70,9 @@ function cleanupFile(filePath) {
 
 function fetchVideoInfo(url) {
   return new Promise((resolve, reject) => {
+    const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
     // yt-dlp -J gives us full JSON info including all available formats
-    exec(`yt-dlp -J --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
+    exec(`yt-dlp -J ${cookiesFlag} --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
       if (error) { reject(new Error(stderr || error.message)); return; }
 
       try {
@@ -100,24 +118,25 @@ function fetchVideoInfo(url) {
 
 function downloadYouTube(url, outputPath, quality) {
   return new Promise((resolve, reject) => {
+    // Use cookies if available
+    const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
     let cmd;
 
     if (quality === 'mp3') {
       cmd = `yt-dlp -x --audio-format mp3 --no-playlist \
+        ${cookiesFlag} \
         --extractor-args "youtube:player_client=tv_embedded,android_vr" \
-        --no-check-certificate \
         -o "${outputPath}.mp3" "${url}"`;
     } else {
       const fmt = `bestvideo[height<=${quality}][ext=mp4]+bestaudio/best[height<=${quality}]/best`;
       cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 \
+        ${cookiesFlag} \
         --extractor-args "youtube:player_client=tv_embedded,android_vr" \
-        --no-check-certificate \
         -o "${outputPath}.mp4" "${url}"`;
     }
 
     exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
       if (error) {
-        // Filter only real ERROR lines, ignore warnings
         const errLines = (stderr || '')
           .split('\n')
           .filter(l => l.includes('ERROR:'))
