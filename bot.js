@@ -94,7 +94,75 @@ function fetchVideoInfo(url) {
 }
 
 // ─────────────────────────────────────────────
-// 📥 DOWNLOAD FUNCTION
+// 🎬 COBALT API — For YouTube (works on cloud!)
+// ─────────────────────────────────────────────
+
+const https = require('https');
+
+function downloadFromUrl(fileUrl, destPath) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+    https.get(fileUrl, (response) => {
+      // Follow redirects
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        file.close();
+        downloadFromUrl(response.headers.location, destPath).then(resolve).catch(reject);
+        return;
+      }
+      response.pipe(file);
+      file.on('finish', () => file.close(() => resolve(destPath)));
+    }).on('error', (err) => {
+      fs.unlink(destPath, () => {});
+      reject(err);
+    });
+  });
+}
+
+async function downloadViaCobalt(url, outputPath, mode) {
+  // mode: 'auto' = video, 'audio' = MP3
+  const body = JSON.stringify({
+    url,
+    downloadMode: mode,       // 'auto' or 'audio'
+    audioFormat:  'mp3',      // mp3 when audio mode
+    filenameStyle: 'basic',
+  });
+
+  const downloadUrl = await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.cobalt.tools',
+      path:     '/',
+      method:   'POST',
+      headers:  {
+        'Content-Type':   'application/json',
+        'Accept':         'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.url) resolve(json.url);
+          else reject(new Error(json.error?.code || 'Cobalt API error'));
+        } catch (e) {
+          reject(new Error('Invalid Cobalt response'));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+
+  const ext      = mode === 'audio' ? 'mp3' : 'mp4';
+  const filePath = `${outputPath}.${ext}`;
+  await downloadFromUrl(downloadUrl, filePath);
+  return filePath;
+}
+
+// ─────────────────────────────────────────────
+// 📥 DOWNLOAD FUNCTION (yt-dlp for non-YouTube)
 // ─────────────────────────────────────────────
 
 function downloadMedia(url, outputPath, quality) {
@@ -439,7 +507,17 @@ async function processDownload(ctx, quality) {
   }, 2500);
 
   try {
-    const filePath = await downloadMedia(url, outputPath, quality);
+    const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+    let filePath;
+
+    if (isYouTube) {
+      // 🎬 YouTube → Use Cobalt API (works on cloud!)
+      const cobaltMode = quality === 'mp3' ? 'audio' : 'auto';
+      filePath = await downloadViaCobalt(url, outputPath, cobaltMode);
+    } else {
+      // 📱 Instagram, TikTok, Twitter etc. → Use yt-dlp
+      filePath = await downloadMedia(url, outputPath, quality);
+    }
     clearInterval(progressTimer);
 
     const stats  = fs.statSync(filePath);
