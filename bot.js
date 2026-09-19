@@ -72,7 +72,7 @@ function fetchVideoInfo(url) {
   return new Promise((resolve, reject) => {
     const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
     // yt-dlp -J gives us full JSON info including all available formats
-    exec(`yt-dlp -J ${cookiesFlag} --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
+    exec(`yt-dlp -J ${cookiesFlag} --extractor-args "youtube:player_client=mweb,android" --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
       if (error) { reject(new Error(stderr || error.message)); return; }
 
       try {
@@ -125,13 +125,13 @@ function downloadYouTube(url, outputPath, quality) {
     if (quality === 'mp3') {
       cmd = `yt-dlp -x --audio-format mp3 --no-playlist \
         ${cookiesFlag} \
-        --extractor-args "youtube:player_client=tv_embedded,android_vr" \
+        --extractor-args "youtube:player_client=mweb,android" \
         -o "${outputPath}.mp3" "${url}"`;
     } else {
       const fmt = `bestvideo[height<=${quality}][ext=mp4]+bestaudio/best[height<=${quality}]/best`;
       cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 \
         ${cookiesFlag} \
-        --extractor-args "youtube:player_client=tv_embedded,android_vr" \
+        --extractor-args "youtube:player_client=mweb,android" \
         -o "${outputPath}.mp4" "${url}"`;
     }
 
