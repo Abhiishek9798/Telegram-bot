@@ -28,11 +28,11 @@ if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
 const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
 
-if (process.env.YOUTUBE_COOKIES) {
+if (!fs.existsSync(COOKIES_PATH) && process.env.YOUTUBE_COOKIES) {
   try {
     const cookiesData = Buffer.from(process.env.YOUTUBE_COOKIES, 'base64').toString('utf-8');
     fs.writeFileSync(COOKIES_PATH, cookiesData);
-    console.log('🍪 YouTube cookies loaded!');
+    console.log('🍪 YouTube cookies loaded from ENV!');
   } catch (e) {
     console.error('❌ Failed to load cookies:', e.message);
   }
@@ -128,7 +128,7 @@ function downloadYouTube(url, outputPath, quality) {
         --extractor-args "youtube:player_client=mweb,android" \
         -o "${outputPath}.mp3" "${url}"`;
     } else {
-      const fmt = `bestvideo[height<=${quality}][ext=mp4]+bestaudio/best[height<=${quality}]/best`;
+      const fmt = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
       cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 \
         ${cookiesFlag} \
         --extractor-args "youtube:player_client=mweb,android" \
