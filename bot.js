@@ -181,7 +181,7 @@ bot.telegram.setMyCommands([
   { command: 'start', description: '🏠 Start the bot'       },
   { command: 'help',  description: '📖 How to use this bot' },
   { command: 'about', description: 'ℹ️ About & Credits'      },
-]);
+]).catch(err => console.error('setMyCommands error:', err.message));
 
 // ─────────────────────────────────────────────
 // ⌨️ PERSISTENT BOTTOM KEYBOARD
@@ -588,7 +588,15 @@ server.listen(PORT, () => {
 // 🚀 LAUNCH
 // ─────────────────────────────────────────────
 
-bot.launch();
+// Catch any unhandled promise rejections — prevents crash
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ Unhandled Rejection:', reason);
+});
+
+bot.launch()
+  .then(() => console.log('✅ Bot polling started!'))
+  .catch(err => console.error('❌ Bot launch error:', err.message));
+
 console.log('🤖 Video Downloader Bot is LIVE!');
 console.log(`🛠️  Made by ${CREATOR_NAME}`);
 console.log('📥 Supports: YouTube, Instagram, TikTok, Twitter & 1000+ sites!');
