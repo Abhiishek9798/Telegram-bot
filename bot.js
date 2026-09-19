@@ -513,6 +513,22 @@ bot.action('q_cancel', async (ctx) => {
 });
 
 // ─────────────────────────────────────────────
+// 🌐 HTTP SERVER (Required for Render hosting)
+// ─────────────────────────────────────────────
+
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end(`🤖 Video Downloader Bot is LIVE!\n🛠 Made by ${CREATOR_NAME}\n✅ Status: Running`);
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 Health server running on port ${PORT}`);
+});
+
+// ─────────────────────────────────────────────
 // 🚀 LAUNCH
 // ─────────────────────────────────────────────
 
