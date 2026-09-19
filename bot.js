@@ -10,7 +10,7 @@ const path = require('path');
 const CREATOR_NAME = 'Abhishek';
 const CREATOR_TAG  = `🛠 Made with ❤️ by ${CREATOR_NAME}`;
 
-const TOKEN = process.env.BOT_TOKEN;
+const TOKEN = process.env.BOT_TOKEN || '8807389589:AAHH9jZHVmTPY99vu3gHXRaDVT4Mkk8FY6E';
 if (!TOKEN || TOKEN === 'YOUR_BOT_TOKEN_HERE') {
   console.error('❌ Set your BOT_TOKEN in the .env file!');
   process.exit(1);
