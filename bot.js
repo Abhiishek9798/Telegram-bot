@@ -137,18 +137,18 @@ bot.telegram.setMyCommands([
 ]);
 
 // ─────────────────────────────────────────────
-// 🤖 /start — Welcome Message
-// ─────────────────────────────────────────────
-
-// ─────────────────────────────────────────────
 // ⌨️ PERSISTENT BOTTOM KEYBOARD
-// (Always visible at the bottom of the chat)
+// Always visible at bottom of chat!
 // ─────────────────────────────────────────────
 
 const mainKeyboard = Markup.keyboard([
-  ['🏠 Home',  '📖 Help'],
-  ['ℹ️ About', '📥 How to Download'],
+  ['🏠 Home',          '📖 Help'],
+  ['ℹ️ About',         '📥 How to Download'],
 ]).resize().persistent();
+
+// ─────────────────────────────────────────────
+// 🤖 /start — Welcome Message
+// ─────────────────────────────────────────────
 
 bot.start(async (ctx) => {
   const name = ctx.from.first_name;
@@ -159,7 +159,6 @@ bot.start(async (ctx) => {
     try { await ctx.replyWithAnimation({ source: localGif }); } catch (e) {}
   }
 
-  // Send welcome message WITH the persistent keyboard attached
   await ctx.replyWithMarkdown(
     `╔══════════════════════╗\n` +
     `     🎬 *Video Downloader Bot*\n` +
@@ -174,7 +173,7 @@ bot.start(async (ctx) => {
     `📌 *Just paste any video link below!* 👇\n\n` +
     `━━━━━━━━━━━━━━━━━━━\n` +
     `${CREATOR_TAG}`,
-    mainKeyboard   // ← This attaches the bottom keyboard
+    mainKeyboard
   );
 });
 
@@ -222,16 +221,17 @@ bot.help((ctx) => {
 });
 
 // ─────────────────────────────────────────────
-// 🔗 HANDLE VIDEO LINK
+// ⌨️ KEYBOARD BUTTON HANDLERS
 // ─────────────────────────────────────────────
 
-// Handle persistent keyboard button taps
 bot.hears('🏠 Home', async (ctx) => {
   const name = ctx.from.first_name;
   await ctx.replyWithMarkdown(
     `👋 Hey *${name}*!\n\n` +
-    `📌 Just paste any video link and I'll download it for you!\n\n` +
-    `Supported: YouTube, Instagram, TikTok, Twitter & more 🎬`,
+    `📌 Just paste any video link below and I'll download it!\n\n` +
+    `Supported: YouTube, Instagram, TikTok, Twitter & more 🎬\n\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `${CREATOR_TAG}`,
     mainKeyboard
   );
 });
@@ -288,9 +288,18 @@ bot.hears('📥 How to Download', (ctx) => {
   );
 });
 
+// ─────────────────────────────────────────────
+// 🔗 HANDLE VIDEO LINK
+// ─────────────────────────────────────────────
+
+// Keyboard button texts — skip these in URL handler
+const KEYBOARD_TEXTS = ['🏠 Home', '📖 Help', 'ℹ️ About', '📥 How to Download'];
+
 bot.on('text', async (ctx) => {
   const text = ctx.message.text.trim();
-  if (text.startsWith('/')) return;
+  if (text.startsWith('/')) return;           // ignore commands
+  if (KEYBOARD_TEXTS.includes(text)) return;  // ignore keyboard buttons
+
 
   // Validate URL
   try { new URL(text); } catch {
