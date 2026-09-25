@@ -71,56 +71,56 @@ function cleanupFile(filePath) {
 function fetchVideoInfo(url) {
   return new Promise((resolve, reject) => {
     const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
-    exec(`yt-dlp -J ${cookiesFlag} --extractor-args "youtube:player_client=mweb,android" --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
-      if (error) {
-        const errStr = (stderr || error.message || '').toLowerCase();
-        if (errStr.includes('no video formats') || errStr.includes('no video')) {
+    const userAgent = '--add-header "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"';
+    exec(`yt-dlp -J ${cookiesFlag} ${userAgent} --extractor-args "youtube:player_client=mweb,android" --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
+      if (stdout && stdout.trim().startsWith('{')) {
+        try {
+          const info    = JSON.parse(stdout);
+          const formats = info.formats || [];
+
+          const seenHeights = new Set();
+          const qualities   = [];
+
+          formats.forEach(f => {
+            if (f.height && f.vcodec && f.vcodec !== 'none') {
+              if (!seenHeights.has(f.height)) {
+                seenHeights.add(f.height);
+                qualities.push(f.height);
+              }
+            }
+          });
+
+          qualities.sort((a, b) => b - a);
+
+          if (qualities.length === 0) {
+            qualities.push('photo');
+          }
+
           resolve({
-            title: 'Instagram Photo / Slide Post',
-            duration: 0,
-            uploader: 'Instagram',
-            thumbnail: null,
-            qualities: ['photo'],
+            title:     info.title     || 'Instagram Post',
+            duration:  info.duration  || 0,
+            uploader:  info.uploader  || 'Instagram',
+            thumbnail: info.thumbnail || null,
+            qualities,
           });
           return;
+        } catch (e) {
+          // Fall through to error handler
         }
-        reject(new Error(stderr || error.message));
+      }
+
+      const errStr = (stderr || error?.message || '').toLowerCase();
+      if (errStr.includes('no video formats') || errStr.includes('no video') || errStr.includes('empty media response')) {
+        resolve({
+          title: 'Instagram Photo / Slide Post',
+          duration: 0,
+          uploader: 'Instagram',
+          thumbnail: null,
+          qualities: ['photo'],
+        });
         return;
       }
-
-      try {
-        const info    = JSON.parse(stdout);
-        const formats = info.formats || [];
-
-        const seenHeights = new Set();
-        const qualities   = [];
-
-        formats.forEach(f => {
-          if (f.height && f.vcodec && f.vcodec !== 'none') {
-            if (!seenHeights.has(f.height)) {
-              seenHeights.add(f.height);
-              qualities.push(f.height);
-            }
-          }
-        });
-
-        qualities.sort((a, b) => b - a);
-
-        if (qualities.length === 0) {
-          qualities.push('photo');
-        }
-
-        resolve({
-          title:     info.title     || 'Instagram Post',
-          duration:  info.duration  || 0,
-          uploader:  info.uploader  || 'Instagram',
-          thumbnail: info.thumbnail || null,
-          qualities,
-        });
-
-      } catch (e) {
-        reject(new Error('Could not read video info.'));
-      }
+      reject(new Error(stderr || error?.message || 'Could not read video info.'));
     });
   });
 }
