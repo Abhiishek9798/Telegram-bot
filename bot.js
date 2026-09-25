@@ -71,20 +71,31 @@ function cleanupFile(filePath) {
 function fetchVideoInfo(url) {
   return new Promise((resolve, reject) => {
     const cookiesFlag = fs.existsSync(COOKIES_PATH) ? `--cookies "${COOKIES_PATH}"` : '';
-    // yt-dlp -J gives us full JSON info including all available formats
     exec(`yt-dlp -J ${cookiesFlag} --extractor-args "youtube:player_client=mweb,android" --no-playlist "${url}"`, { timeout: 30000 }, (error, stdout, stderr) => {
-      if (error) { reject(new Error(stderr || error.message)); return; }
+      if (error) {
+        const errStr = (stderr || error.message || '').toLowerCase();
+        if (errStr.includes('no video formats') || errStr.includes('no video')) {
+          resolve({
+            title: 'Instagram Photo / Slide Post',
+            duration: 0,
+            uploader: 'Instagram',
+            thumbnail: null,
+            qualities: ['photo'],
+          });
+          return;
+        }
+        reject(new Error(stderr || error.message));
+        return;
+      }
 
       try {
         const info    = JSON.parse(stdout);
         const formats = info.formats || [];
 
-        // Collect unique video heights that have both video + audio or are combined
         const seenHeights = new Set();
         const qualities   = [];
 
         formats.forEach(f => {
-          // Only include formats that have video
           if (f.height && f.vcodec && f.vcodec !== 'none') {
             if (!seenHeights.has(f.height)) {
               seenHeights.add(f.height);
@@ -93,15 +104,18 @@ function fetchVideoInfo(url) {
           }
         });
 
-        // Sort from highest to lowest quality
         qualities.sort((a, b) => b - a);
 
+        if (qualities.length === 0) {
+          qualities.push('photo');
+        }
+
         resolve({
-          title:     info.title     || 'Unknown Title',
+          title:     info.title     || 'Instagram Post',
           duration:  info.duration  || 0,
-          uploader:  info.uploader  || 'Unknown',
+          uploader:  info.uploader  || 'Instagram',
           thumbnail: info.thumbnail || null,
-          qualities,          // e.g. [1080, 720, 480, 360, 240, 144]
+          qualities,
         });
 
       } catch (e) {
@@ -416,6 +430,9 @@ bot.on('text', async (ctx) => {
     // ─── Build dynamic quality buttons ───
     // Map each quality height to a button row
     const qualityButtons = qualities.map(h => {
+      if (h === 'photo') {
+        return [Markup.button.callback('📸 Download HD Photo / Carousel', 'q_photo')];
+      }
       let label = `📹 ${h}p`;
       if (h >= 2160) label = `🔵 4K (${h}p)`;
       else if (h >= 1440) label = `🟣 2K (${h}p)`;
@@ -426,8 +443,9 @@ bot.on('text', async (ctx) => {
       return [Markup.button.callback(label, `q_${h}`)];
     });
 
-    // Add MP3 and Cancel buttons
-    qualityButtons.push([Markup.button.callback('🎵 MP3 — Audio Only', 'q_mp3')]);
+    if (!qualities.includes('photo')) {
+      qualityButtons.push([Markup.button.callback('🎵 MP3 — Audio Only', 'q_mp3')]);
+    }
     qualityButtons.push([Markup.button.callback('❌ Cancel', 'q_cancel')]);
 
     // Edit the "fetching" message with video info + quality buttons
@@ -603,6 +621,7 @@ bot.action(/^q_(\d+)$/, (ctx) => {
   return processDownload(ctx, quality);
 });
 
+bot.action('q_photo', (ctx) => processDownload(ctx, 'photo'));
 bot.action('q_mp3', (ctx) => processDownload(ctx, 'mp3'));
 
 bot.action('q_cancel', async (ctx) => {
