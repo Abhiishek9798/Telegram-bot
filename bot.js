@@ -159,9 +159,11 @@ function downloadYouTube(url, outputPath, quality) {
   });
 }
 
-// ─────────────────────────────────────────────
-// 📥 DOWNLOAD FUNCTION (yt-dlp for non-YouTube)
-// ─────────────────────────────────────────────
+function findDownloadedFiles(outputPath) {
+  const baseName = path.basename(outputPath);
+  const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(baseName));
+  return files.map(f => path.join(DOWNLOAD_DIR, f));
+}
 
 function downloadMedia(url, outputPath, quality) {
   return new Promise((resolve, reject) => {
@@ -170,24 +172,40 @@ function downloadMedia(url, outputPath, quality) {
     if (quality === 'mp3') {
       cmd = `yt-dlp -x --audio-format mp3 --no-playlist -o "${outputPath}.mp3" "${url}"`;
     } else {
-      // Download best format at or below the selected height
-      const fmt = `bestvideo[height<=${quality}][ext=mp4]+bestaudio/best[height<=${quality}][ext=mp4]/best[height<=${quality}]/best`;
+      const fmt = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
       cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 -o "${outputPath}.mp4" "${url}"`;
     }
 
     exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
-      if (error) { reject(new Error(stderr || error.message)); return; }
-
-      const ext      = quality === 'mp3' ? 'mp3' : 'mp4';
-      const filePath = `${outputPath}.${ext}`;
-
-      if (fs.existsSync(filePath)) {
-        resolve(filePath);
-      } else {
-        const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(path.basename(outputPath)));
-        if (files.length > 0) resolve(path.join(DOWNLOAD_DIR, files[0]));
-        else reject(new Error('Downloaded file not found.'));
+      if (error) {
+        const errStr = (stderr || error.message || '').toLowerCase();
+        // Fallback for Instagram Photos / Carousels / Slides
+        if (errStr.includes('no video formats') || errStr.includes('requested format is not available') || errStr.includes('no video')) {
+          const fallbackCmd = `yt-dlp --no-playlist -o "${outputPath}_%(autonumber)s.%(ext)s" "${url}"`;
+          exec(fallbackCmd, { timeout: 300000 }, (err2, stdout2, stderr2) => {
+            if (err2) {
+              const singleCmd = `yt-dlp --no-playlist -o "${outputPath}.%(ext)s" "${url}"`;
+              exec(singleCmd, { timeout: 300000 }, (err3, stdout3, stderr3) => {
+                if (err3) { reject(new Error(stderr2 || err2.message)); return; }
+                const files = findDownloadedFiles(outputPath);
+                if (files.length > 0) resolve(files);
+                else reject(new Error('Downloaded file not found.'));
+              });
+              return;
+            }
+            const files = findDownloadedFiles(outputPath);
+            if (files.length > 0) resolve(files);
+            else reject(new Error('Downloaded file not found.'));
+          });
+          return;
+        }
+        reject(new Error(stderr || error.message));
+        return;
       }
+
+      const files = findDownloadedFiles(outputPath);
+      if (files.length > 0) resolve(files);
+      else reject(new Error('Downloaded file not found.'));
     });
   });
 }
@@ -506,53 +524,59 @@ async function processDownload(ctx, quality) {
 
   try {
     const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
-    let filePath;
+    let result;
 
     if (isYouTube) {
       // 🎬 YouTube → android client bypass
-      filePath = await downloadYouTube(url, outputPath, quality);
+      result = await downloadYouTube(url, outputPath, quality);
     } else {
-      // 📱 Instagram, TikTok, Twitter etc. → yt-dlp
-      filePath = await downloadMedia(url, outputPath, quality);
+      // 📱 Instagram, TikTok, Twitter etc. → yt-dlp (with photo fallback)
+      result = await downloadMedia(url, outputPath, quality);
     }
+
+    const fileList = Array.isArray(result) ? result : [result];
     clearInterval(progressTimer);
 
-    const stats  = fs.statSync(filePath);
-    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-
-    if (stats.size > 50 * 1024 * 1024) {
-      cleanupFile(filePath);
-      await ctx.telegram.editMessageText(chatId, msgId, null,
-        `❌ File too large! (${sizeMB}MB)\n\nTelegram max is 50MB.\nTry a lower quality or shorter video.`
-      );
-      return;
+    if (fileList.length === 0) {
+      throw new Error('Downloaded file not found.');
     }
 
     // Show 100%
     await ctx.telegram.editMessageText(chatId, msgId, null,
       `✅ Done!\n\n` +
       `${makeProgressBar(100)}\n\n` +
-      `📤 Sending your file...`
+      `📤 Sending your media...`
     );
 
-    const caption =
-      quality === 'mp3'
-        ? `🎵 *Audio Downloaded!*\n\n` +
-          `📊 Format: MP3\n\n` +
-          `━━━━━━━━━━━━━━━━━━━\n${CREATOR_TAG}`
-        : `🎬 *Video Downloaded!*\n\n` +
-          `📌 Platform: ${platform}\n` +
-          `📊 Quality: ${qualityLabel}\n` +
-          `💾 Size: ${sizeMB}MB\n\n` +
-          `━━━━━━━━━━━━━━━━━━━\n${CREATOR_TAG}`;
+    for (const filePath of fileList) {
+      const ext = path.extname(filePath).toLowerCase();
+      const stats = fs.statSync(filePath);
+      const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
-    if (quality === 'mp3') {
-      await ctx.replyWithAudio({ source: filePath }, { caption, parse_mode: 'Markdown' });
-    } else {
-      await ctx.replyWithVideo({ source: filePath }, { caption, parse_mode: 'Markdown', supports_streaming: true });
+      if (stats.size > 50 * 1024 * 1024) {
+        cleanupFile(filePath);
+        await ctx.reply(`❌ File too large! (${sizeMB}MB)\nTelegram max limit is 50MB.`);
+        continue;
+      }
+
+      const caption =
+        quality === 'mp3' || ['.mp3', '.m4a', '.aac'].includes(ext)
+          ? `🎵 *Audio Downloaded!*\n\n📊 Format: MP3\n\n━━━━━━━━━━━━━━━━━━━\n${CREATOR_TAG}`
+          : ['.jpg', '.jpeg', '.png', '.webp'].includes(ext)
+            ? `📸 *Photo Downloaded!*\n\n📌 Platform: ${platform}\n💾 Size: ${sizeMB}MB\n\n━━━━━━━━━━━━━━━━━━━\n${CREATOR_TAG}`
+            : `🎬 *Video Downloaded!*\n\n📌 Platform: ${platform}\n📊 Quality: ${qualityLabel}\n💾 Size: ${sizeMB}MB\n\n━━━━━━━━━━━━━━━━━━━\n${CREATOR_TAG}`;
+
+      if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+        await ctx.replyWithPhoto({ source: filePath }, { caption, parse_mode: 'Markdown' });
+      } else if (quality === 'mp3' || ['.mp3', '.m4a', '.aac'].includes(ext)) {
+        await ctx.replyWithAudio({ source: filePath }, { caption, parse_mode: 'Markdown' });
+      } else {
+        await ctx.replyWithVideo({ source: filePath }, { caption, parse_mode: 'Markdown', supports_streaming: true });
+      }
+
+      cleanupFile(filePath);
     }
 
-    cleanupFile(filePath);
     ctx.telegram.deleteMessage(chatId, msgId).catch(() => {});
 
   } catch (err) {
