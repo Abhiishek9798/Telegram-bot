@@ -185,8 +185,11 @@ function downloadMedia(url, outputPath, quality) {
 
     if (quality === 'mp3') {
       cmd = `yt-dlp -x --audio-format mp3 --no-playlist -o "${outputPath}.mp3" "${url}"`;
+    } else if (quality === 'photo') {
+      cmd = `yt-dlp --no-playlist -o "${outputPath}_%(playlist_index)s.%(ext)s" "${url}"`;
     } else {
-      const fmt = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
+      const heightLimit = parseInt(quality, 10);
+      const fmt = heightLimit ? `bestvideo[height<=${heightLimit}]+bestaudio/best[height<=${heightLimit}]/best` : 'bestvideo+bestaudio/best';
       cmd = `yt-dlp -f "${fmt}" --no-playlist --merge-output-format mp4 -o "${outputPath}.mp4" "${url}"`;
     }
 
@@ -194,16 +197,15 @@ function downloadMedia(url, outputPath, quality) {
       if (error) {
         const errStr = (stderr || error.message || '').toLowerCase();
         // Fallback for Instagram Photos / Carousels / Slides
-        if (errStr.includes('no video formats') || errStr.includes('requested format is not available') || errStr.includes('no video')) {
-          const fallbackCmd = `yt-dlp --no-playlist -o "${outputPath}_%(autonumber)s.%(ext)s" "${url}"`;
+        if (quality === 'photo' || errStr.includes('no video formats') || errStr.includes('requested format is not available') || errStr.includes('no video')) {
+          const fallbackCmd = `yt-dlp --no-playlist -o "${outputPath}.%(ext)s" "${url}"`;
           exec(fallbackCmd, { timeout: 300000 }, (err2, stdout2, stderr2) => {
             if (err2) {
-              const singleCmd = `yt-dlp --no-playlist -o "${outputPath}.%(ext)s" "${url}"`;
-              exec(singleCmd, { timeout: 300000 }, (err3, stdout3, stderr3) => {
-                if (err3) { reject(new Error(stderr2 || err2.message)); return; }
+              const multiCmd = `yt-dlp --no-playlist -o "${outputPath}_%(playlist_index)s.%(ext)s" "${url}"`;
+              exec(multiCmd, { timeout: 300000 }, (err3, stdout3, stderr3) => {
                 const files = findDownloadedFiles(outputPath);
                 if (files.length > 0) resolve(files);
-                else reject(new Error('Downloaded file not found.'));
+                else reject(new Error(stderr3 || stderr2 || err2.message));
               });
               return;
             }
