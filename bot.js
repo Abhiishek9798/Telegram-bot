@@ -173,6 +173,70 @@ function downloadYouTube(url, outputPath, quality) {
   });
 }
 
+const https = require('https');
+
+function downloadFromUrl(fileUrl, destPath) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+    https.get(fileUrl, (response) => {
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        file.close();
+        downloadFromUrl(response.headers.location, destPath).then(resolve).catch(reject);
+        return;
+      }
+      response.pipe(file);
+      file.on('finish', () => file.close(() => resolve(destPath)));
+    }).on('error', (err) => {
+      fs.unlink(destPath, () => {});
+      reject(err);
+    });
+  });
+}
+
+function fetchInstagramPhotos(url, outputPath) {
+  return new Promise((resolve, reject) => {
+    const match = url.match(/instagram\.com\/(?:p|reel|tv|stories)\/([^/?#&]+)/i);
+    if (!match) {
+      return reject(new Error('Invalid Instagram URL'));
+    }
+    const shortcode = match[1];
+    const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
+
+    https.get(embedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      }
+    }, (res) => {
+      let html = '';
+      res.on('data', chunk => html += chunk);
+      res.on('end', async () => {
+        try {
+          const rawMatches = html.match(/https:\/\/[^"]+?\.jpg[^"]*/g) || [];
+          const cleanUrls = [...new Set(rawMatches.map(u => u.replace(/&amp;/g, '&')))]
+            .filter(u => u.includes('t51.82787-15') || u.includes('scontent') || u.includes('cdninstagram'));
+
+          if (cleanUrls.length === 0) {
+            return reject(new Error('No photos found in Instagram post'));
+          }
+
+          const downloadedFiles = [];
+          for (let i = 0; i < cleanUrls.length; i++) {
+            const imgUrl = cleanUrls[i];
+            const filePath = `${outputPath}_${i + 1}.jpg`;
+            await downloadFromUrl(imgUrl, filePath);
+            downloadedFiles.push(filePath);
+          }
+
+          resolve(downloadedFiles);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
 function findDownloadedFiles(outputPath) {
   const baseName = path.basename(outputPath);
   const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(baseName));
@@ -181,6 +245,20 @@ function findDownloadedFiles(outputPath) {
 
 function downloadMedia(url, outputPath, quality) {
   return new Promise((resolve, reject) => {
+    const isInsta = url.includes('instagram.com');
+
+    if (quality === 'photo' && isInsta) {
+      fetchInstagramPhotos(url, outputPath).then(resolve).catch(() => {
+        const fallbackCmd = `yt-dlp --no-playlist -o "${outputPath}.%(ext)s" "${url}"`;
+        exec(fallbackCmd, { timeout: 300000 }, () => {
+          const files = findDownloadedFiles(outputPath);
+          if (files.length > 0) resolve(files);
+          else reject(new Error('Could not download Instagram photos.'));
+        });
+      });
+      return;
+    }
+
     let cmd;
 
     if (quality === 'mp3') {
@@ -196,22 +274,20 @@ function downloadMedia(url, outputPath, quality) {
     exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
       if (error) {
         const errStr = (stderr || error.message || '').toLowerCase();
-        // Fallback for Instagram Photos / Carousels / Slides
-        if (quality === 'photo' || errStr.includes('no video formats') || errStr.includes('requested format is not available') || errStr.includes('no video')) {
+        if (isInsta || quality === 'photo' || errStr.includes('no video formats') || errStr.includes('requested format is not available') || errStr.includes('no video') || errStr.includes('empty media response')) {
+          if (isInsta) {
+            fetchInstagramPhotos(url, outputPath).then(resolve).catch(() => {
+              const files = findDownloadedFiles(outputPath);
+              if (files.length > 0) resolve(files);
+              else reject(new Error(stderr || error.message));
+            });
+            return;
+          }
           const fallbackCmd = `yt-dlp --no-playlist -o "${outputPath}.%(ext)s" "${url}"`;
-          exec(fallbackCmd, { timeout: 300000 }, (err2, stdout2, stderr2) => {
-            if (err2) {
-              const multiCmd = `yt-dlp --no-playlist -o "${outputPath}_%(playlist_index)s.%(ext)s" "${url}"`;
-              exec(multiCmd, { timeout: 300000 }, (err3, stdout3, stderr3) => {
-                const files = findDownloadedFiles(outputPath);
-                if (files.length > 0) resolve(files);
-                else reject(new Error(stderr3 || stderr2 || err2.message));
-              });
-              return;
-            }
+          exec(fallbackCmd, { timeout: 300000 }, (err2) => {
             const files = findDownloadedFiles(outputPath);
             if (files.length > 0) resolve(files);
-            else reject(new Error('Downloaded file not found.'));
+            else reject(new Error(stderr || error.message));
           });
           return;
         }
