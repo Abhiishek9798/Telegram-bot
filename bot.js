@@ -220,23 +220,32 @@ function downloadFromUrl(fileUrl, destPath, timeoutMs = 30000) {
 }
 
 // ─────────────────────────────────────────────
-// 📸 INSTAGRAM PHOTO DOWNLOAD — Multi-proxy fallback
+// 📸 INSTAGRAM PHOTO DOWNLOAD
+// Uses imginn.com (3rd-party viewer) — not blocked by Instagram from cloud IPs
 // ─────────────────────────────────────────────
 
-function httpGet(proxyUrl, timeoutMs = 15000) {
+function httpGet(targetUrl, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
-    const req = https.get(proxyUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    const req = https.get(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      }
     }, (res) => {
-      if (res.statusCode >= 400) {
-        return reject(new Error(`HTTP ${res.statusCode}`));
+      // Follow redirect
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+        return httpGet(res.headers.location, timeoutMs).then(resolve).catch(reject);
       }
       let data = '';
       res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
+      res.on('end', () => {
+        console.log('[Instagram] HTTP', res.statusCode, '| Length:', data.length);
+        resolve({ status: res.statusCode, body: data });
+      });
     });
     req.on('error', reject);
-    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Timeout')); });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Request timed out')); });
   });
 }
 
@@ -244,45 +253,31 @@ async function fetchInstagramPhotos(url, outputPath) {
   const match = url.match(/instagram\.com\/(?:p|reel|tv|stories)\/([^/?#&]+)/i);
   if (!match) throw new Error('Invalid Instagram URL');
   const shortcode = match[1];
-  const embedUrl  = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
-  const encoded   = encodeURIComponent(embedUrl);
 
-  // Try multiple free proxies — first one that returns real HTML wins
-  const proxies = [
-    `https://api.allorigins.win/raw?url=${encoded}`,
-    `https://thingproxy.freeboard.io/fetch/${encoded}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
-  ];
+  // Fetch from imginn.com — public Instagram viewer, not blocked from cloud IPs
+  const imginnUrl = `https://imginn.com/p/${shortcode}/`;
+  console.log('[Instagram] Fetching imginn.com:', shortcode);
 
-  let html = '';
-  for (const proxyUrl of proxies) {
-    try {
-      console.log('[Instagram] Trying:', proxyUrl.substring(8, 45));
-      const result = await httpGet(proxyUrl, 15000);
-      if (result && result.length > 300) {
-        html = result;
-        console.log('[Instagram] Got HTML, length:', html.length);
-        break;
-      }
-    } catch (e) {
-      console.error('[Instagram] Proxy failed:', e.message);
-    }
+  const { status, body: html } = await httpGet(imginnUrl, 20000);
+
+  if (status >= 400 || html.length < 200) {
+    throw new Error('Could not download Instagram photos.');
   }
 
-  if (!html) throw new Error('Could not download Instagram photos.');
-
-  // Extract Instagram CDN image URLs from the embed HTML
+  // imginn.com serves images via their own CDN or Instagram CDN
+  // Look for img tags with data-src or src attributes, and direct jpg URLs
   const rawMatches = html.match(/https:\/\/[^\s"'<>\\]+?\.jpe?g[^\s"'<>\\]*/gi) || [];
-  console.log('[Instagram] Raw jpg matches:', rawMatches.length);
+  console.log('[Instagram] Raw jpg matches from imginn:', rawMatches.length);
 
+  // imginn CDN or Instagram CDN
   const cleanUrls = [...new Set(
-    rawMatches.map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&').split('"')[0])
+    rawMatches.map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&').split(/["'<>]/)[0])
   )].filter(u =>
-    u.includes('fbcdn.net') || u.includes('cdninstagram') ||
-    u.includes('scontent')  || u.includes('t51.82787-15')
+    u.includes('imginn') || u.includes('fbcdn.net') ||
+    u.includes('cdninstagram') || u.includes('scontent')
   );
 
-  console.log('[Instagram] Clean CDN URLs:', cleanUrls.length);
+  console.log('[Instagram] Clean URLs:', cleanUrls.length);
   if (cleanUrls.length === 0) throw new Error('Could not download Instagram photos.');
 
   const files = [];
@@ -293,7 +288,6 @@ async function fetchInstagramPhotos(url, outputPath) {
   }
   return files;
 }
-
 
 function findDownloadedFiles(outputPath) {
   const baseName = path.basename(outputPath);
