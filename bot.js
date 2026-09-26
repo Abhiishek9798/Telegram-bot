@@ -220,77 +220,80 @@ function downloadFromUrl(fileUrl, destPath, timeoutMs = 30000) {
 }
 
 // ─────────────────────────────────────────────
-// 📸 INSTAGRAM PHOTO DOWNLOAD
-// Uses free allorigins.win proxy to bypass cloud IP blocking
+// 📸 INSTAGRAM PHOTO DOWNLOAD — Multi-proxy fallback
 // ─────────────────────────────────────────────
 
-function fetchInstagramPhotos(url, outputPath) {
+function httpGet(proxyUrl, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
-    const match = url.match(/instagram\.com\/(?:p|reel|tv|stories)\/([^/?#&]+)/i);
-    if (!match) return reject(new Error('Invalid Instagram URL'));
-    const shortcode = match[1];
-    const embedUrl  = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
-
-    // corsproxy.io returns raw HTML directly (no JSON wrapping)
-    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(embedUrl)}`;
-    console.log('[Instagram] Fetching via corsproxy:', shortcode);
-
     const req = https.get(proxyUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Origin': 'https://corsproxy.io',
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
     }, (res) => {
-      console.log('[Instagram] Proxy HTTP status:', res.statusCode);
-      let html = '';
-      res.on('data', chunk => html += chunk);
-      res.on('end', async () => {
-        try {
-          console.log('[Instagram] HTML length:', html.length, '| Preview:', html.substring(0, 80));
-
-          // Match all jpg/jpeg CDN URLs
-          const rawMatches = html.match(/https:\/\/[^\s"'<>\\]+?\.jpe?g[^\s"'<>\\]*/gi) || [];
-          console.log('[Instagram] Raw jpg matches:', rawMatches.length);
-
-          const cleanUrls = [...new Set(
-            rawMatches.map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&').split('"')[0])
-          )].filter(u =>
-            u.includes('fbcdn.net') ||
-            u.includes('cdninstagram') ||
-            u.includes('scontent') ||
-            u.includes('t51.82787-15')
-          );
-
-          console.log('[Instagram] Clean CDN URLs:', cleanUrls.length);
-
-          if (cleanUrls.length === 0) {
-            return reject(new Error('Could not download Instagram photos.'));
-          }
-
-          const files = [];
-          for (let i = 0; i < cleanUrls.length; i++) {
-            const filePath = `${outputPath}_${i + 1}.jpg`;
-            await downloadFromUrl(cleanUrls[i], filePath);
-            files.push(filePath);
-          }
-          resolve(files);
-        } catch (e) {
-          console.error('[Instagram] Processing error:', e.message);
-          reject(new Error('Could not download Instagram photos.'));
-        }
-      });
+      if (res.statusCode >= 400) {
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(data));
     });
-    req.on('error', (e) => {
-      console.error('[Instagram] Proxy request error:', e.message);
-      reject(new Error('Could not download Instagram photos.'));
-    });
-    req.setTimeout(20000, () => {
-      req.destroy();
-      console.error('[Instagram] Proxy request timed out');
-      reject(new Error('Could not download Instagram photos.'));
-    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Timeout')); });
   });
 }
+
+async function fetchInstagramPhotos(url, outputPath) {
+  const match = url.match(/instagram\.com\/(?:p|reel|tv|stories)\/([^/?#&]+)/i);
+  if (!match) throw new Error('Invalid Instagram URL');
+  const shortcode = match[1];
+  const embedUrl  = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
+  const encoded   = encodeURIComponent(embedUrl);
+
+  // Try multiple free proxies — first one that returns real HTML wins
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encoded}`,
+    `https://thingproxy.freeboard.io/fetch/${encoded}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
+  ];
+
+  let html = '';
+  for (const proxyUrl of proxies) {
+    try {
+      console.log('[Instagram] Trying:', proxyUrl.substring(8, 45));
+      const result = await httpGet(proxyUrl, 15000);
+      if (result && result.length > 300) {
+        html = result;
+        console.log('[Instagram] Got HTML, length:', html.length);
+        break;
+      }
+    } catch (e) {
+      console.error('[Instagram] Proxy failed:', e.message);
+    }
+  }
+
+  if (!html) throw new Error('Could not download Instagram photos.');
+
+  // Extract Instagram CDN image URLs from the embed HTML
+  const rawMatches = html.match(/https:\/\/[^\s"'<>\\]+?\.jpe?g[^\s"'<>\\]*/gi) || [];
+  console.log('[Instagram] Raw jpg matches:', rawMatches.length);
+
+  const cleanUrls = [...new Set(
+    rawMatches.map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&').split('"')[0])
+  )].filter(u =>
+    u.includes('fbcdn.net') || u.includes('cdninstagram') ||
+    u.includes('scontent')  || u.includes('t51.82787-15')
+  );
+
+  console.log('[Instagram] Clean CDN URLs:', cleanUrls.length);
+  if (cleanUrls.length === 0) throw new Error('Could not download Instagram photos.');
+
+  const files = [];
+  for (let i = 0; i < cleanUrls.length; i++) {
+    const filePath = `${outputPath}_${i + 1}.jpg`;
+    await downloadFromUrl(cleanUrls[i], filePath);
+    files.push(filePath);
+  }
+  return files;
+}
+
 
 function findDownloadedFiles(outputPath) {
   const baseName = path.basename(outputPath);
