@@ -754,7 +754,27 @@ bot.action(/^q_(\d+)$/, (ctx) => {
   return processDownload(ctx, quality);
 });
 
-bot.action('q_photo', (ctx) => processDownload(ctx, 'photo'));
+bot.action('q_photo', async (ctx) => {
+  await ctx.answerCbQuery('📸 Photo Post Detected');
+  const userId = ctx.from.id;
+  const data   = pendingDownloads.get(userId);
+  const url    = data?.url || '';
+  pendingDownloads.delete(userId);
+
+  await ctx.editMessageText(
+    `📸 *Photo / Carousel Post*\n\n` +
+    `⚠️ Instagram blocks photo downloads from cloud servers.\n` +
+    `(This is an Instagram restriction, not a bot bug)\n\n` +
+    `✅ *What works:*\n` +
+    `• Open the link below → tap the ⋯ menu → Save to phone\n` +
+    `• Or use Instagram's own save feature\n\n` +
+    `🔗 *Direct Link:*\n${url}\n\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `_Note: Reels & Videos download perfectly fine!_\n` +
+    `${CREATOR_TAG}`,
+    { parse_mode: 'Markdown' }
+  );
+});
 bot.action('q_mp3', (ctx) => processDownload(ctx, 'mp3'));
 
 bot.action('q_cancel', async (ctx) => {
