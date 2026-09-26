@@ -49,12 +49,13 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '7024979191';
 async function alertAdmin(errorMsg, url, user) {
   if (!ADMIN_CHAT_ID) return;
   try {
-    const userInfo = user ? `👤 *User:* ${user.first_name || 'Unknown'} (ID: \`${user.id}\`)` : '';
-    const urlInfo  = url  ? `🔗 *URL:* ${url.substring(0, 80)}` : '';
-    const text = `⚠️ *Bot Error Alert*\n\n${userInfo}\n${urlInfo}\n❌ *Reason:* ${String(errorMsg).substring(0, 200)}`;
-    await bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'Markdown' });
+    const userInfo = user ? `👤 User: ${user.first_name || 'Unknown'} (ID: ${user.id})` : '';
+    const urlInfo  = url  ? `🔗 URL: ${String(url).substring(0, 100)}` : '';
+    const text = `⚠️ Bot Error Alert\n\n${userInfo}\n${urlInfo}\n❌ Error: ${String(errorMsg).substring(0, 300)}`;
+    await bot.telegram.sendMessage(ADMIN_CHAT_ID, text);
+    console.log('[Admin] Alert sent to admin.');
   } catch (e) {
-    console.error('Admin alert failed:', e.message);
+    console.error('[Admin] Alert failed:', e.message);
   }
 }
 
@@ -225,6 +226,7 @@ function fetchInstagramPhotos(url, outputPath) {
 
     // Route through free allorigins.win proxy — bypasses Instagram datacenter IP block
     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(embedUrl)}`;
+    console.log('[Instagram] Fetching via proxy:', proxyUrl);
 
     https.get(proxyUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
@@ -233,11 +235,26 @@ function fetchInstagramPhotos(url, outputPath) {
       res.on('data', chunk => data += chunk);
       res.on('end', async () => {
         try {
-          const json       = JSON.parse(data);
-          const html       = json.contents || '';
-          const rawMatches = html.match(/https:\/\/[^"\\]+?\.jpg[^"\\]*/g) || [];
-          const cleanUrls  = [...new Set(rawMatches.map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&')))]
-            .filter(u => u.includes('t51.82787-15') || u.includes('scontent') || u.includes('cdninstagram'));
+          const json = JSON.parse(data);
+          const html = json.contents || '';
+          console.log('[Instagram] Proxy status:', json.status?.http_code, '| HTML length:', html.length);
+
+          // Match all jpg/jpeg URLs — Instagram uses fbcdn.net, cdninstagram.com, scontent domains
+          const rawMatches = html.match(/https:\/\/[^\s"'<>\\]+?\.jpe?g[^\s"'<>\\]*/gi) || [];
+          console.log('[Instagram] Raw jpg matches:', rawMatches.length);
+
+          const cleanUrls = [...new Set(
+            rawMatches
+              .map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&').replace(/\\"/g, '').split('"')[0])
+          )].filter(u =>
+            u.includes('fbcdn.net') ||
+            u.includes('cdninstagram') ||
+            u.includes('scontent') ||
+            u.includes('t51.82787-15')
+          );
+
+          console.log('[Instagram] Clean CDN URLs found:', cleanUrls.length);
+          if (cleanUrls.length > 0) console.log('[Instagram] Sample URL:', cleanUrls[0].substring(0, 80));
 
           if (cleanUrls.length === 0) {
             return reject(new Error('Could not download Instagram photos.'));
@@ -251,10 +268,14 @@ function fetchInstagramPhotos(url, outputPath) {
           }
           resolve(files);
         } catch (e) {
+          console.error('[Instagram] Parse error:', e.message);
           reject(new Error('Could not download Instagram photos.'));
         }
       });
-    }).on('error', () => reject(new Error('Could not download Instagram photos.')));
+    }).on('error', (e) => {
+      console.error('[Instagram] Proxy request error:', e.message);
+      reject(new Error('Could not download Instagram photos.'));
+    });
   });
 }
 
