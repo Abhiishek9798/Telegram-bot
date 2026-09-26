@@ -195,45 +195,54 @@ function downloadFromUrl(fileUrl, destPath) {
 
 function fetchInstagramPhotos(url, outputPath) {
   return new Promise((resolve, reject) => {
-    const match = url.match(/instagram\.com\/(?:p|reel|tv|stories)\/([^/?#&]+)/i);
-    if (!match) {
-      return reject(new Error('Invalid Instagram URL'));
-    }
-    const shortcode = match[1];
-    const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
-
-    https.get(embedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      }
-    }, (res) => {
-      let html = '';
-      res.on('data', chunk => html += chunk);
-      res.on('end', async () => {
-        try {
-          const rawMatches = html.match(/https:\/\/[^"]+?\.jpg[^"]*/g) || [];
-          const cleanUrls = [...new Set(rawMatches.map(u => u.replace(/&amp;/g, '&')))]
-            .filter(u => u.includes('t51.82787-15') || u.includes('scontent') || u.includes('cdninstagram'));
-
-          if (cleanUrls.length === 0) {
-            return reject(new Error('No photos found in Instagram post'));
+    // Step 1: Get all entry URLs via flat-playlist
+    const flatCmd = `yt-dlp --flat-playlist -J "${url}"`;
+    exec(flatCmd, { timeout: 30000 }, async (err, stdout) => {
+      let entryUrls = [];
+      try {
+        if (stdout && stdout.trim().startsWith('{')) {
+          const info = JSON.parse(stdout);
+          if (info.entries && info.entries.length > 0) {
+            // Carousel / album — collect each entry's URL
+            entryUrls = info.entries
+              .filter(e => e && (e.url || e.webpage_url))
+              .map(e => e.url || e.webpage_url);
           }
-
-          const downloadedFiles = [];
-          for (let i = 0; i < cleanUrls.length; i++) {
-            const imgUrl = cleanUrls[i];
-            const filePath = `${outputPath}_${i + 1}.jpg`;
-            await downloadFromUrl(imgUrl, filePath);
-            downloadedFiles.push(filePath);
-          }
-
-          resolve(downloadedFiles);
-        } catch (err) {
-          reject(err);
         }
-      });
-    }).on('error', reject);
+      } catch (e) {}
+
+      // If no entries found, treat the URL itself as single photo
+      if (entryUrls.length === 0) {
+        entryUrls = [url];
+      }
+
+      // Step 2: For each entry, get its thumbnail URL via yt-dlp --get-thumbnail
+      const downloadedFiles = [];
+      let index = 1;
+      for (const entryUrl of entryUrls) {
+        try {
+          const thumbUrl = await new Promise((res2, rej2) => {
+            exec(`yt-dlp --get-thumbnail "${entryUrl}"`, { timeout: 20000 }, (e2, out2) => {
+              const line = (out2 || '').trim().split('\n').find(l => l.startsWith('http'));
+              if (line) res2(line.trim());
+              else rej2(new Error('No thumbnail URL'));
+            });
+          });
+          const filePath = `${outputPath}_${index}.jpg`;
+          await downloadFromUrl(thumbUrl, filePath);
+          downloadedFiles.push(filePath);
+          index++;
+        } catch (e) {
+          // Skip failed entries, continue with others
+          console.error('Photo entry failed:', e.message);
+        }
+      }
+
+      if (downloadedFiles.length === 0) {
+        return reject(new Error('Could not download Instagram photos.'));
+      }
+      resolve(downloadedFiles);
+    });
   });
 }
 
