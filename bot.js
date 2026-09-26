@@ -42,6 +42,24 @@ if (!fs.existsSync(COOKIES_PATH) && process.env.YOUTUBE_COOKIES) {
 const pendingDownloads = new Map();
 
 // ─────────────────────────────────────────────
+// 🔔 ADMIN ALERT CONFIG
+// ─────────────────────────────────────────────
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '7024979191';
+
+async function alertAdmin(errorMsg, url, user) {
+  if (!ADMIN_CHAT_ID) return;
+  try {
+    const userInfo = user ? `👤 *User:* ${user.first_name || 'Unknown'} (ID: \`${user.id}\`)` : '';
+    const urlInfo  = url  ? `🔗 *URL:* ${url.substring(0, 80)}` : '';
+    const text = `⚠️ *Bot Error Alert*\n\n${userInfo}\n${urlInfo}\n❌ *Reason:* ${String(errorMsg).substring(0, 200)}`;
+    await bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'Markdown' });
+  } catch (e) {
+    console.error('Admin alert failed:', e.message);
+  }
+}
+
+
+// ─────────────────────────────────────────────
 // 🔧 HELPERS
 // ─────────────────────────────────────────────
 
@@ -193,56 +211,50 @@ function downloadFromUrl(fileUrl, destPath) {
   });
 }
 
+// ─────────────────────────────────────────────
+// 📸 INSTAGRAM PHOTO DOWNLOAD
+// Uses free allorigins.win proxy to bypass cloud IP blocking
+// ─────────────────────────────────────────────
+
 function fetchInstagramPhotos(url, outputPath) {
   return new Promise((resolve, reject) => {
-    // Step 1: Get all entry URLs via flat-playlist
-    const flatCmd = `yt-dlp --flat-playlist -J "${url}"`;
-    exec(flatCmd, { timeout: 30000 }, async (err, stdout) => {
-      let entryUrls = [];
-      try {
-        if (stdout && stdout.trim().startsWith('{')) {
-          const info = JSON.parse(stdout);
-          if (info.entries && info.entries.length > 0) {
-            // Carousel / album — collect each entry's URL
-            entryUrls = info.entries
-              .filter(e => e && (e.url || e.webpage_url))
-              .map(e => e.url || e.webpage_url);
-          }
-        }
-      } catch (e) {}
+    const match = url.match(/instagram\.com\/(?:p|reel|tv|stories)\/([^/?#&]+)/i);
+    if (!match) return reject(new Error('Invalid Instagram URL'));
+    const shortcode = match[1];
+    const embedUrl  = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
 
-      // If no entries found, treat the URL itself as single photo
-      if (entryUrls.length === 0) {
-        entryUrls = [url];
-      }
+    // Route through free allorigins.win proxy — bypasses Instagram datacenter IP block
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(embedUrl)}`;
 
-      // Step 2: For each entry, get its thumbnail URL via yt-dlp --get-thumbnail
-      const downloadedFiles = [];
-      let index = 1;
-      for (const entryUrl of entryUrls) {
+    https.get(proxyUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', async () => {
         try {
-          const thumbUrl = await new Promise((res2, rej2) => {
-            exec(`yt-dlp --get-thumbnail "${entryUrl}"`, { timeout: 20000 }, (e2, out2) => {
-              const line = (out2 || '').trim().split('\n').find(l => l.startsWith('http'));
-              if (line) res2(line.trim());
-              else rej2(new Error('No thumbnail URL'));
-            });
-          });
-          const filePath = `${outputPath}_${index}.jpg`;
-          await downloadFromUrl(thumbUrl, filePath);
-          downloadedFiles.push(filePath);
-          index++;
-        } catch (e) {
-          // Skip failed entries, continue with others
-          console.error('Photo entry failed:', e.message);
-        }
-      }
+          const json       = JSON.parse(data);
+          const html       = json.contents || '';
+          const rawMatches = html.match(/https:\/\/[^"\\]+?\.jpg[^"\\]*/g) || [];
+          const cleanUrls  = [...new Set(rawMatches.map(u => u.replace(/\\u0026/g, '&').replace(/&amp;/g, '&')))]
+            .filter(u => u.includes('t51.82787-15') || u.includes('scontent') || u.includes('cdninstagram'));
 
-      if (downloadedFiles.length === 0) {
-        return reject(new Error('Could not download Instagram photos.'));
-      }
-      resolve(downloadedFiles);
-    });
+          if (cleanUrls.length === 0) {
+            return reject(new Error('Could not download Instagram photos.'));
+          }
+
+          const files = [];
+          for (let i = 0; i < cleanUrls.length; i++) {
+            const filePath = `${outputPath}_${i + 1}.jpg`;
+            await downloadFromUrl(cleanUrls[i], filePath);
+            files.push(filePath);
+          }
+          resolve(files);
+        } catch (e) {
+          reject(new Error('Could not download Instagram photos.'));
+        }
+      });
+    }).on('error', () => reject(new Error('Could not download Instagram photos.')));
   });
 }
 
@@ -687,6 +699,9 @@ async function processDownload(ctx, quality) {
   } catch (err) {
     clearInterval(progressTimer);
     console.error('Download error:', err.message);
+
+    // 🔔 Notify admin about the failure
+    alertAdmin(err.message, url, ctx.from).catch(() => {});
 
     let errMsg = '❌ Download Failed!\n\n';
     if (err.message.includes('private'))        errMsg += 'This content is private.';
